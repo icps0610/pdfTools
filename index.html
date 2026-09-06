@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -476,6 +477,35 @@ body {
     transform: scale(1.1);
 }
 
+#lightbox-rotate-left,
+#lightbox-rotate-right {
+    position: fixed;
+    top: 20px;
+    width: 40px;
+    height: 40px;
+    background: rgba(255,255,255,0.15);
+    border: none;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.15s;
+    z-index: 10000;
+}
+
+#lightbox-rotate-left  { left: 72px; }
+#lightbox-rotate-right { left: 120px; }
+
+#lightbox-rotate-left:hover,
+#lightbox-rotate-right:hover {
+    background: rgba(255,255,255,0.3);
+    transform: scale(1.1);
+}
+
 #lightbox-nav-prev,
 #lightbox-nav-next {
     position: fixed;
@@ -575,6 +605,8 @@ body {
 <!-- Lightbox 浮動預覽 -->
 <div id="lightbox">
     <button id="lightbox-delete">🗑</button>
+    <button id="lightbox-rotate-left">↺</button>
+    <button id="lightbox-rotate-right">↻</button>
     <button id="lightbox-close">&times;</button>
     <button id="lightbox-nav-prev">&#8249;</button>
     <img id="lightbox-img" src="" alt="預覽">
@@ -594,18 +626,24 @@ body {
     const labelLeft    = document.getElementById('labelLeft');
 
     /* ---- Lightbox ---- */
-    const lightbox     = document.getElementById('lightbox');
-    const lbImg        = document.getElementById('lightbox-img');
-    const lbClose      = document.getElementById('lightbox-close');
-    const lbDelete     = document.getElementById('lightbox-delete');
-    const lbPrev       = document.getElementById('lightbox-nav-prev');
-    const lbNext       = document.getElementById('lightbox-nav-next');
-    const lbCounter    = document.getElementById('lightbox-counter');
+    const lightbox      = document.getElementById('lightbox');
+    const lbImg         = document.getElementById('lightbox-img');
+    const lbClose       = document.getElementById('lightbox-close');
+    const lbDelete      = document.getElementById('lightbox-delete');
+    const lbRotateLeft  = document.getElementById('lightbox-rotate-left');
+    const lbRotateRight = document.getElementById('lightbox-rotate-right');
+    const lbPrev        = document.getElementById('lightbox-nav-prev');
+    const lbNext        = document.getElementById('lightbox-nav-next');
+    const lbCounter     = document.getElementById('lightbox-counter');
     let lbIndex = 0;
+    let lbRotation = 0; // 目前預覽的旋轉角度（僅視覺，不影響輸出資料）
 
     function openLightbox(idx) {
         if (allPages.length === 0) return;
         lbIndex = Math.max(0, Math.min(idx, allPages.length - 1));
+        lbRotation = 0;
+        lbImg.style.transform = '';
+        lbImg.style.transition = '';
         lbImg.src = allPages[lbIndex].dataUrl;
         lbCounter.textContent = `${lbIndex + 1} / ${allPages.length}`;
         lbPrev.style.display = allPages.length <= 1 ? 'none' : '';
@@ -618,20 +656,28 @@ body {
         lightbox.classList.remove('active');
         document.body.style.overflow = '';
         lbImg.src = '';
+        lbRotation = 0;
+        lbImg.style.transform = '';
+    }
+
+    function rotateLb(delta) {
+        lbRotation = (lbRotation + delta + 360) % 360;
+        lbImg.style.transition = 'transform 0.25s ease';
+        lbImg.style.transform = `rotate(${lbRotation}deg)`;
     }
 
     lbClose.addEventListener('click', closeLightbox);
     lightbox.addEventListener('click', e => { if (e.target === lightbox) closeLightbox(); });
-    lbPrev.addEventListener('click', e => { e.stopPropagation(); openLightbox(lbIndex - 1); });
-    lbNext.addEventListener('click', e => { e.stopPropagation(); openLightbox(lbIndex + 1); });
+    lbPrev.addEventListener('click',        e => { e.stopPropagation(); openLightbox(lbIndex - 1); });
+    lbNext.addEventListener('click',        e => { e.stopPropagation(); openLightbox(lbIndex + 1); });
+    lbRotateLeft.addEventListener('click',  e => { e.stopPropagation(); rotateLb(-90); });
+    lbRotateRight.addEventListener('click', e => { e.stopPropagation(); rotateLb(90); });
 
     lbDelete.addEventListener('click', e => {
         e.stopPropagation();
         if (allPages.length === 0) return;
-        // 找到對應的 DOM 卡片並移除
         const cards = previewGrid.querySelectorAll('.preview-card');
         if (cards[lbIndex]) cards[lbIndex].remove();
-        // 從資料陣列移除
         allPages.splice(lbIndex, 1);
         updateBtnText();
         if (allPages.length === 0) {
@@ -647,6 +693,8 @@ body {
         if (e.key === 'ArrowLeft')   openLightbox(lbIndex - 1);
         if (e.key === 'ArrowRight')  openLightbox(lbIndex + 1);
         if (e.key === 'Delete')      lbDelete.click();
+        if (e.key === ',')           rotateLb(-90);
+        if (e.key === '.')           rotateLb(90);
     });
     const labelRight   = document.getElementById('labelRight');
 
