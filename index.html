@@ -1,5 +1,3 @@
-
-
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -392,6 +390,135 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* ===== Lightbox 浮動預覽 ===== */
+#lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.82);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+    padding: 5vh 5vw;
+    backdrop-filter: blur(4px);
+    animation: lb-fade-in 0.15s ease;
+}
+
+#lightbox.active {
+    display: flex;
+}
+
+@keyframes lb-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+#lightbox-img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+    animation: lb-scale-in 0.15s ease;
+}
+
+@keyframes lb-scale-in {
+    from { transform: scale(0.93); opacity: 0; }
+    to   { transform: scale(1);    opacity: 1; }
+}
+
+#lightbox-close {
+    position: fixed;
+    top: 20px;
+    right: 24px;
+    width: 40px;
+    height: 40px;
+    background: rgba(255,255,255,0.15);
+    border: none;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+    z-index: 10000;
+}
+
+#lightbox-close:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+#lightbox-delete {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    width: 40px;
+    height: 40px;
+    background: rgba(239, 68, 68, 0.75);
+    border: none;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.1s;
+    z-index: 10000;
+}
+
+#lightbox-delete:hover {
+    background: rgba(220, 38, 38, 0.95);
+    transform: scale(1.1);
+}
+
+#lightbox-nav-prev,
+#lightbox-nav-next {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.15);
+    border: none;
+    color: #fff;
+    font-size: 28px;
+    width: 48px;
+    height: 64px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+    z-index: 10000;
+}
+
+#lightbox-nav-prev { left: 16px; }
+#lightbox-nav-next { right: 16px; }
+
+#lightbox-nav-prev:hover,
+#lightbox-nav-next:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+#lightbox-counter {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.7);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    z-index: 10000;
+}
+
+/* 預覽卡片加入 pointer 游標提示 */
+.preview-card { cursor: zoom-in; }
+
 /* ===== RWD ===== */
 @media (max-width: 540px) {
     .it-wrapper { padding: 0 10px; margin: 16px auto 32px; }
@@ -445,6 +572,16 @@ body {
     </div>
 </div>
 
+<!-- Lightbox 浮動預覽 -->
+<div id="lightbox">
+    <button id="lightbox-delete">🗑</button>
+    <button id="lightbox-close">&times;</button>
+    <button id="lightbox-nav-prev">&#8249;</button>
+    <img id="lightbox-img" src="" alt="預覽">
+    <button id="lightbox-nav-next">&#8250;</button>
+    <div id="lightbox-counter"></div>
+</div>
+
 <!-- JS 邏輯 -->
 <script>
     const fileInput    = document.getElementById('fileInput');
@@ -455,6 +592,62 @@ body {
     const dropZone     = document.getElementById('dropZone');
     const modeToggle   = document.getElementById('modeToggle');
     const labelLeft    = document.getElementById('labelLeft');
+
+    /* ---- Lightbox ---- */
+    const lightbox     = document.getElementById('lightbox');
+    const lbImg        = document.getElementById('lightbox-img');
+    const lbClose      = document.getElementById('lightbox-close');
+    const lbDelete     = document.getElementById('lightbox-delete');
+    const lbPrev       = document.getElementById('lightbox-nav-prev');
+    const lbNext       = document.getElementById('lightbox-nav-next');
+    const lbCounter    = document.getElementById('lightbox-counter');
+    let lbIndex = 0;
+
+    function openLightbox(idx) {
+        if (allPages.length === 0) return;
+        lbIndex = Math.max(0, Math.min(idx, allPages.length - 1));
+        lbImg.src = allPages[lbIndex].dataUrl;
+        lbCounter.textContent = `${lbIndex + 1} / ${allPages.length}`;
+        lbPrev.style.display = allPages.length <= 1 ? 'none' : '';
+        lbNext.style.display = allPages.length <= 1 ? 'none' : '';
+        lightbox.classList.add('active');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeLightbox() {
+        lightbox.classList.remove('active');
+        document.body.style.overflow = '';
+        lbImg.src = '';
+    }
+
+    lbClose.addEventListener('click', closeLightbox);
+    lightbox.addEventListener('click', e => { if (e.target === lightbox) closeLightbox(); });
+    lbPrev.addEventListener('click', e => { e.stopPropagation(); openLightbox(lbIndex - 1); });
+    lbNext.addEventListener('click', e => { e.stopPropagation(); openLightbox(lbIndex + 1); });
+
+    lbDelete.addEventListener('click', e => {
+        e.stopPropagation();
+        if (allPages.length === 0) return;
+        // 找到對應的 DOM 卡片並移除
+        const cards = previewGrid.querySelectorAll('.preview-card');
+        if (cards[lbIndex]) cards[lbIndex].remove();
+        // 從資料陣列移除
+        allPages.splice(lbIndex, 1);
+        updateBtnText();
+        if (allPages.length === 0) {
+            closeLightbox();
+        } else {
+            openLightbox(Math.min(lbIndex, allPages.length - 1));
+        }
+    });
+
+    document.addEventListener('keydown', e => {
+        if (!lightbox.classList.contains('active')) return;
+        if (e.key === 'Escape')      closeLightbox();
+        if (e.key === 'ArrowLeft')   openLightbox(lbIndex - 1);
+        if (e.key === 'ArrowRight')  openLightbox(lbIndex + 1);
+        if (e.key === 'Delete')      lbDelete.click();
+    });
     const labelRight   = document.getElementById('labelRight');
 
     let allPages = [];
@@ -604,6 +797,10 @@ body {
                         updateBtnText();
                     };
                     card.appendChild(delBtn);
+                    card.onclick = (e) => {
+                        if (e.target === delBtn || delBtn.contains(e.target)) return;
+                        openLightbox(allPages.indexOf(pageItem));
+                    };
 
                     previewGrid.appendChild(card);
                     updateBtnText(); resolve();
@@ -664,6 +861,10 @@ body {
                 pageCard.appendChild(tc); 
                 pageCard.appendChild(badge);
                 pageCard.appendChild(delBtn);
+                pageCard.onclick = (e) => {
+                    if (e.target === delBtn || delBtn.contains(e.target)) return;
+                    openLightbox(allPages.indexOf(pageItem));
+                };
                 previewGrid.appendChild(pageCard);
             }
             updateBtnText();
@@ -726,6 +927,10 @@ body {
                 pageCard.remove(); updateBtnText();
             };
             pageCard.appendChild(thumb); pageCard.appendChild(badge); pageCard.appendChild(delBtn);
+            pageCard.onclick = (e) => {
+                if (e.target === delBtn || delBtn.contains(e.target)) return;
+                openLightbox(allPages.indexOf(pageItem));
+            };
             previewGrid.appendChild(pageCard);
         }
         updateBtnText();
