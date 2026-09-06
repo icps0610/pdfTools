@@ -1,3 +1,5 @@
+
+
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -7,6 +9,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     </script>
@@ -430,10 +434,10 @@ body {
 
         <!-- 上傳區 -->
         <div class="it-drop" id="dropZone">
-            點擊選擇照片或 PDF，或將檔案拖曳到此處
-            <small>支援圖片（JPG/PNG…）與 PDF，可分次加入，PDF 會展開為每頁</small>
+            點擊選擇檔案，或將檔案拖曳到此處
+            <small>支援 圖片（JPG/PNG…）、PDF、HTML、Word (.docx)，可分次加入</small>
         </div>
-        <input type="file" id="fileInput" multiple accept="image/*,application/pdf" style="display:none;">
+        <input type="file" id="fileInput" multiple accept="image/*,application/pdf,.html,.htm,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display:none;">
 
         <!-- 預覽格 -->
         <div class="it-grid" id="previewGrid"></div>
@@ -496,15 +500,54 @@ body {
     modeToggle.addEventListener('click', () => { singleMode = !singleMode; updateModeUI(); });
     updateModeUI();
 
-    /* ---- 上傳事件 ---- */
+    /* ---- 拖曳上傳 ---- */
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, e => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('dragover');
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        });
+    });
+
+    ['dragleave'].forEach(eventName => {
+        dropZone.addEventListener(eventName, e => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('dragover');
+        });
+    });
+
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('dragover');
+
+        const dt = e.dataTransfer;
+        if (!dt) return;
+
+        const files = Array.from(dt.files || []);
+        console.log('[檔案拖曳] 收到檔案數量:', files.length, files.map(f => f.name));
+
+        if (files.length > 0) {
+            handleFiles(files);
+        }
+    });
+
+    // 防止檔案拖到頁面其他位置時瀏覽器直接開啟檔案
+    document.addEventListener('dragover', e => {
+        e.preventDefault();
+    });
+
+    document.addEventListener('drop', e => {
+        if (e.target !== dropZone && !dropZone.contains(e.target)) {
+            e.preventDefault();
+        }
+    });
+
+    /* ---- 點擊上傳 ---- */
     dropZone.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', e => { handleFiles(e.target.files); fileInput.value = ''; });
-    dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-    dropZone.addEventListener('dragleave', e => { e.preventDefault(); dropZone.classList.remove('dragover'); });
-    dropZone.addEventListener('drop', e => {
-        e.preventDefault(); dropZone.classList.remove('dragover');
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
-    });
 
     clearBtn.addEventListener('click', () => {
         allPages = []; previewGrid.innerHTML = ''; fileInput.value = '';
@@ -516,10 +559,18 @@ body {
         const list = Array.from(files).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         if (list.length === 0) return;
         for (const file of list) {
-            if (file.type.startsWith('image/')) {
+            const name = file.name.toLowerCase();
+            const type = file.type || '';
+            if (type.startsWith('image/') || /\.(jpe?g|png|gif|bmp|webp|tiff?|svg)$/.test(name)) {
                 await handleImageFile(file);
-            } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+            } else if (type === 'application/pdf' || name.endsWith('.pdf')) {
                 await handlePdfFile(file);
+            } else if (name.endsWith('.html') || name.endsWith('.htm')) {
+                await handleHtmlFile(file);
+            } else if (name.endsWith('.docx') || type.includes('wordprocessingml')) {
+                await handleDocxFile(file);
+            } else {
+                alert(`不支援的檔案格式：${file.name}`);
             }
         }
     }
@@ -620,6 +671,116 @@ body {
             card.remove();
             console.error('PDF 解析失敗:', err);
             alert(`PDF 解析失敗：${file.name}\n${err.message}`);
+        }
+    }
+
+    /* ---- 隱藏渲染容器（供 html2canvas 截圖用） ---- */
+    const _offscreenContainer = (() => {
+        const div = document.createElement('div');
+        div.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;z-index:-1;';
+        document.body.appendChild(div);
+        return div;
+    })();
+
+    /* 把一個 DOM 容器截圖，拆成多頁加入 allPages */
+    async function renderContainerToPages(container, label) {
+        // 等待所有圖片載入
+        await Promise.all(Array.from(container.querySelectorAll('img')).map(img =>
+            new Promise(r => { img.complete ? r() : (img.onload = r, img.onerror = r); })
+        ));
+
+        const A4_W = 794, A4_H = 1123; // px at 96dpi
+        const totalH = container.scrollHeight;
+        const pages = Math.ceil(totalH / A4_H);
+
+        for (let pg = 0; pg < pages; pg++) {
+            const canvas = await html2canvas(container, {
+                scale: 2,
+                useCORS: true,
+                y: pg * A4_H,
+                height: Math.min(A4_H, totalH - pg * A4_H),
+                width: A4_W,
+                windowWidth: A4_W,
+            });
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+            const pageItem = { type: 'image', dataUrl, width: canvas.width, height: canvas.height, file: { name: label } };
+            allPages.push(pageItem);
+
+            const pageCard = document.createElement('div');
+            pageCard.className = 'preview-card';
+            const thumb = document.createElement('img');
+            thumb.src = dataUrl; thumb.className = 'preview-img';
+            const badge = document.createElement('span');
+            badge.className = 'pdf-badge'; badge.textContent = `P${pg + 1}`;
+            if (pages > 1) {
+                const pb = document.createElement('span');
+                pb.className = 'pdf-pages-badge'; pb.textContent = `共${pages}頁`;
+                pageCard.appendChild(pb);
+            }
+            const delBtn = document.createElement('button');
+            delBtn.className = 'delete-btn'; delBtn.innerHTML = '&times;';
+            delBtn.onclick = (e) => {
+                e.stopPropagation();
+                const idx = allPages.indexOf(pageItem);
+                if (idx > -1) allPages.splice(idx, 1);
+                pageCard.remove(); updateBtnText();
+            };
+            pageCard.appendChild(thumb); pageCard.appendChild(badge); pageCard.appendChild(delBtn);
+            previewGrid.appendChild(pageCard);
+        }
+        updateBtnText();
+    }
+
+    /* ---- 處理 HTML 檔案 ---- */
+    async function handleHtmlFile(file) {
+        const loadingCard = document.createElement('div');
+        loadingCard.className = 'preview-card';
+        loadingCard.innerHTML = `<div class="loading-mask"><span class="mini-spinner"></span>解析 HTML…</div>`;
+        previewGrid.appendChild(loadingCard);
+        try {
+            const text = await file.text();
+            _offscreenContainer.innerHTML = text;
+            await renderContainerToPages(_offscreenContainer, file.name);
+        } catch (err) {
+            console.error('HTML 解析失敗:', err);
+            alert(`HTML 解析失敗：${file.name}\n${err.message}`);
+        } finally {
+            _offscreenContainer.innerHTML = '';
+            loadingCard.remove();
+        }
+    }
+
+    /* ---- 處理 Word (.docx) 檔案 ---- */
+    async function handleDocxFile(file) {
+        const loadingCard = document.createElement('div');
+        loadingCard.className = 'preview-card';
+        loadingCard.innerHTML = `<div class="loading-mask"><span class="mini-spinner"></span>解析 Word…</div>`;
+        previewGrid.appendChild(loadingCard);
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const result = await mammoth.convertToHtml({ arrayBuffer });
+            _offscreenContainer.innerHTML = `
+                <style>
+                    * { box-sizing: border-box; font-family: "Microsoft JhengHei", "Noto Sans TC", sans-serif; }
+                    body, div { margin: 0; padding: 0; }
+                    p { margin: 0 0 8px; line-height: 1.6; }
+                    h1,h2,h3,h4 { margin: 12px 0 6px; }
+                    table { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
+                    td, th { border: 1px solid #ccc; padding: 4px 8px; }
+                    img { max-width: 100%; height: auto; }
+                </style>
+                <div style="padding: 32px;">
+                    ${result.value}
+                </div>
+            `;
+            if (result.messages.length > 0) console.warn('Word 轉換提示:', result.messages);
+            await renderContainerToPages(_offscreenContainer, file.name);
+        } catch (err) {
+            console.error('Word 解析失敗:', err);
+            alert(`Word 解析失敗：${file.name}\n${err.message}`);
+        } finally {
+            _offscreenContainer.innerHTML = '';
+            loadingCard.remove();
         }
     }
 
