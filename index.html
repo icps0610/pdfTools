@@ -1,5 +1,3 @@
-
-
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -1041,7 +1039,6 @@ body {
     /* ---- 旋轉輔助 ---- */
     function getRotatedPage(item, targetPortrait) {
         const { dataUrl, width, height } = item;
-        if (item.type !== 'image') return { dataUrl, width, height };
         const isPortrait = height > width;
         if (isPortrait === targetPortrait) return { dataUrl, width, height };
         const canvas = document.createElement('canvas');
@@ -1103,15 +1100,15 @@ body {
             }
             pdf.save(filename);
         } else {
-            const pdf = new jsPDF('l', 'mm', 'a4');
-            const W = 297, H = 210, halfW = W / 2;
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const W = 210, H = 297, halfH = H / 2;
             for (let i = 0; i < allPages.length; i++) {
-                const pg = getRotatedPage(allPages[i], true);
-                const sc = Math.min(halfW / pg.width, H / pg.height);
+                const pg = getRotatedPage(allPages[i], false);
+                const sc = Math.min(W / pg.width, halfH / pg.height);
                 const dw = pg.width * sc, dh = pg.height * sc;
-                const xOff = (i % 2 === 0) ? 0 : halfW;
+                const yOff = (i % 2 === 0) ? 0 : halfH;
                 if (i > 0 && i % 2 === 0) pdf.addPage();
-                pdf.addImage(pg.dataUrl, 'JPEG', xOff + (halfW - dw)/2, (H - dh)/2, dw, dh);
+                pdf.addImage(pg.dataUrl, 'JPEG', (W - dw)/2, yOff + (halfH - dh)/2, dw, dh);
             }
             pdf.save(filename);
         }
