@@ -8,6 +8,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -867,17 +868,17 @@ body {
         previewGrid.appendChild(card);
         try {
             const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
             const numPages = pdfDoc.numPages;
             card.remove();
             for (let p = 1; p <= numPages; p++) {
                 const page = await pdfDoc.getPage(p);
-                const viewport = page.getViewport({ scale: 1.5 });
+                const viewport = page.getViewport({ scale: 2.5 });
                 const canvas = document.createElement('canvas');
                 canvas.width = viewport.width; canvas.height = viewport.height;
                 await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-                const dataUrl = canvas.toDataURL('image/png');
-                const pageItem = { type: 'pdf', dataUrl, width: canvas.width, height: canvas.height, file, pageNum: p };
+                const dataUrl = canvas.toDataURL('image/jpeg', 1);
+                const pageItem = { type: 'pdf', dataUrl, width: canvas.width, height: canvas.height, file, pageNum: p, origBuffer: arrayBuffer };
                 allPages.push(pageItem);
                 const pageCard = document.createElement('div');
                 pageCard.className = 'preview-card';
@@ -943,14 +944,14 @@ body {
 
         for (let pg = 0; pg < pages; pg++) {
             const canvas = await html2canvas(container, {
-                scale: 2,
+                scale: 2.5,
                 useCORS: true,
                 y: pg * A4_H,
                 height: Math.min(A4_H, totalH - pg * A4_H),
                 width: A4_W,
                 windowWidth: A4_W,
             });
-            const dataUrl = canvas.toDataURL('image/png');
+            const dataUrl = canvas.toDataURL('image/jpeg', 1);
             const pageItem = { type: 'image', dataUrl, width: canvas.width, height: canvas.height, file: { name: label } };
             allPages.push(pageItem);
 
@@ -1049,7 +1050,7 @@ body {
         ctx.rotate(90 * Math.PI / 180);
         const img = new Image(); img.src = dataUrl;
         ctx.drawImage(img, -width / 2, -height / 2);
-        return { dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height };
+        return { dataUrl: canvas.toDataURL('image/jpeg', 1), width: canvas.width, height: canvas.height };
     }
 
     /* ---- 執行匯出 ---- */
@@ -1079,6 +1080,7 @@ body {
         }
     });
 
+    
     async function doMergePdf() {
         const now = new Date();
         const yyyy = now.getFullYear();
@@ -1089,31 +1091,134 @@ body {
         const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
         const filename = `${yyyy}${mm}${dd}${hh}${min}_${rand}.pdf`;
 
+        const { PDFDocument, degrees } = PDFLib;
+        const outPdf = await PDFDocument.create();
+        const loadedPdfs = new Map();
+
         if (singleMode) {
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const W = 210, H = 297;
             for (let i = 0; i < allPages.length; i++) {
-                const pg = getRotatedPage(allPages[i], true);
-                if (i > 0) pdf.addPage();
-                const sc = Math.min(W / pg.width, H / pg.height);
-                const imgFmt = pg.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-                pdf.addImage(pg.dataUrl, imgFmt, (W - pg.width*sc)/2, (H - pg.height*sc)/2, pg.width*sc, pg.height*sc);
+                const item = allPages[i];
+                if (item.type === 'pdf') {
+                    let srcPdf;
+                    if (loadedPdfs.has(item.file)) srcPdf = loadedPdfs.get(item.file);
+                    else { srcPdf = await PDFDocument.load(item.origBuffer); loadedPdfs.set(item.file, srcPdf); }
+                    const [copiedPage] = await outPdf.copyPages(srcPdf, [item.pageNum - 1]);
+                    outPdf.addPage(copiedPage);
+                } else {
+                    const isPng = item.dataUrl.startsWith('data:image/png');
+                    const img = isPng ? await outPdf.embedPng(item.dataUrl) : await outPdf.embedJpg(item.dataUrl);
+                    const pg = outPdf.addPage([item.width, item.height]);
+                    pg.drawImage(img, { x: 0, y: 0, width: item.width, height: item.height });
+                }
             }
-            pdf.save(filename);
         } else {
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const W = 210, H = 297, halfH = H / 2;
+            const A4_W = 595.28, A4_H = 841.89, halfH = A4_H / 2;
             for (let i = 0; i < allPages.length; i++) {
-                const pg = getRotatedPage(allPages[i], false);
-                const sc = Math.min(W / pg.width, halfH / pg.height);
-                const dw = pg.width * sc, dh = pg.height * sc;
-                const yOff = (i % 2 === 0) ? 0 : halfH;
-                if (i > 0 && i % 2 === 0) pdf.addPage();
-                const imgFmt = pg.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-                pdf.addImage(pg.dataUrl, imgFmt, (W - dw)/2, yOff + (halfH - dh)/2, dw, dh);
+                const item = allPages[i];
+                let embeddedEntity, origWidth, origHeight;
+
+                if (item.type === 'pdf') {
+                    let srcPdf;
+                    if (loadedPdfs.has(item.file)) srcPdf = loadedPdfs.get(item.file);
+                    else { srcPdf = await PDFDocument.load(item.origBuffer); loadedPdfs.set(item.file, srcPdf); }
+                    const [copiedPage] = await outPdf.copyPages(srcPdf, [item.pageNum - 1]);
+                    embeddedEntity = await outPdf.embedPage(copiedPage);
+                    origWidth = copiedPage.getWidth();
+                    origHeight = copiedPage.getHeight();
+                } else {
+                    const isPng = item.dataUrl.startsWith('data:image/png');
+                    embeddedEntity = isPng ? await outPdf.embedPng(item.dataUrl) : await outPdf.embedJpg(item.dataUrl);
+                    origWidth = item.width;
+                    origHeight = item.height;
+                }
+
+                const isPortrait = origHeight > origWidth;
+                let drawW = origWidth, drawH = origHeight;
+                
+                if (isPortrait) {
+                    drawW = origHeight;
+                    drawH = origWidth;
+                }
+                
+                const sc = Math.min(A4_W / drawW, halfH / drawH);
+                const finalW = drawW * sc, finalH = drawH * sc;
+                const yOff = (i % 2 === 0) ? halfH : 0; 
+                
+                let page;
+                if (i % 2 === 0) page = outPdf.addPage([A4_W, A4_H]);
+                else page = outPdf.getPage(outPdf.getPageCount() - 1);
+
+                const X = (A4_W - finalW) / 2;
+                const Y = yOff + (halfH - finalH) / 2;
+
+                if (isPortrait) {
+                    const drawMethod = item.type === 'pdf' ? page.drawPage : page.drawImage;
+                    drawMethod.call(page, embeddedEntity, {
+                        x: X,
+                        y: Y + finalH,
+                        width: finalH,
+                        height: finalW,
+                        rotate: degrees(-90)
+                    });
+                } else {
+                    const drawMethod = item.type === 'pdf' ? page.drawPage : page.drawImage;
+                    drawMethod.call(page, embeddedEntity, {
+                        x: X,
+                        y: Y,
+                        width: finalW,
+                        height: finalH
+                    });
+                }
             }
-            pdf.save(filename);
         }
+        
+        const pdfBytes = await outPdf.save();
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }
+
+    async function doZipPdf() {
+        const zip = new JSZip();
+        const { PDFDocument } = PDFLib;
+        const loadedPdfs = new Map();
+
+        for (let i = 0; i < allPages.length; i++) {
+            const item = allPages[i];
+            const outPdf = await PDFDocument.create();
+
+            if (item.type === 'pdf') {
+                let srcPdf;
+                if (loadedPdfs.has(item.file)) srcPdf = loadedPdfs.get(item.file);
+                else { srcPdf = await PDFDocument.load(item.origBuffer); loadedPdfs.set(item.file, srcPdf); }
+                const [copiedPage] = await outPdf.copyPages(srcPdf, [item.pageNum - 1]);
+                outPdf.addPage(copiedPage);
+            } else {
+                const isPng = item.dataUrl.startsWith('data:image/png');
+                const img = isPng ? await outPdf.embedPng(item.dataUrl) : await outPdf.embedJpg(item.dataUrl);
+                const pg = outPdf.addPage([item.width, item.height]);
+                pg.drawImage(img, { x: 0, y: 0, width: item.width, height: item.height });
+            }
+            
+            const pdfBytes = await outPdf.save();
+            zip.file(`page_${String(i + 1).padStart(3, '0')}.pdf`, pdfBytes);
+        }
+        const blob = await zip.generateAsync({type:"blob"});
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        const hh = String(now.getHours()).padStart(2, '0');
+        const min = String(now.getMinutes()).padStart(2, '0');
+        const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${yyyy}${mm}${dd}${hh}${min}_${rand}_pdfs.zip`;
+        a.click();
+        URL.revokeObjectURL(a.href);
     }
 
     async function doZipPng() {
@@ -1136,33 +1241,6 @@ body {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `${yyyy}${mm}${dd}${hh}${min}_${rand}_images.zip`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-    }
-
-    async function doZipPdf() {
-        const zip = new JSZip();
-        for (let i = 0; i < allPages.length; i++) {
-            const pg = getRotatedPage(allPages[i], true);
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const W = 210, H = 297;
-            const sc = Math.min(W / pg.width, H / pg.height);
-            const imgFmt = pg.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-            pdf.addImage(pg.dataUrl, imgFmt, (W - pg.width*sc)/2, (H - pg.height*sc)/2, pg.width*sc, pg.height*sc);
-            const pdfData = pdf.output('arraybuffer');
-            zip.file(`page_${String(i + 1).padStart(3, '0')}.pdf`, pdfData);
-        }
-        const blob = await zip.generateAsync({type:"blob"});
-        const now = new Date();
-        const yyyy = now.getFullYear();
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        const dd = String(now.getDate()).padStart(2, '0');
-        const hh = String(now.getHours()).padStart(2, '0');
-        const min = String(now.getMinutes()).padStart(2, '0');
-        const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `${yyyy}${mm}${dd}${hh}${min}_${rand}_pdfs.zip`;
         a.click();
         URL.revokeObjectURL(a.href);
     }
